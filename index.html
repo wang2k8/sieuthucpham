@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Slither Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0d0d17; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            color: #ffffff;
+            font-family: 'Orbitron', sans-serif;
+            text-shadow: 0 0 10px #00d4ff, 0 0 20px #00d4ff;
+            transition: all 0.3s ease;
+        }
+        #score, #speed, #fps, #length { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+        #boost { font-size: 20px; margin-top: 5px; }
+        #power-bar {
+            width: 150px;
+            height: 15px;
+            background: #333;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        #power-inner {
+            height: 100%;
+            background: #ff2e63;
+            width: 100%;
+            transition: width 0.2s;
+        }
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(26, 26, 46, 0.9);
+            padding: 30px 50px;
+            border-radius: 15px;
+            color: #00d4ff;
+            font-family: 'Orbitron', sans-serif;
+            text-align: center;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        #game-over h2 { font-size: 40px; margin: 0; text-transform: uppercase; }
+        #game-over p { font-size: 26px; margin: 15px 0; }
+        #restart-btn {
+            padding: 12px 25px;
+            font-size: 20px;
+            background: #ff2e63;
+            border: none;
+            border-radius: 8px;
+            color: #ffffff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+        #restart-btn:hover { background: #c81044; transform: scale(1.05); }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="ui">
+        <div id="score">Score: 0</div>
+        <div id="speed">Speed: 0.15</div>
+        <div id="fps">FPS: 0</div>
+        <div id="length">Length: 5</div>
+        <div id="boost">Boost: Ready (Right Click)</div>
+        <div id="power-bar"><div id="power-inner"></div></div>
+    </div>
+    <div id="game-over">
+        <h2>Game Over</h2>
+        <p id="final-score">Score: 0</p>
+        <button id="restart-btn">Restart</button>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x0d0d17, 50, 250);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Skybox
+        const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+        const skyMaterial = new THREE.MeshBasicMaterial({ color: 0x0d0d17, side: THREE.BackSide });
+        const skybox = new THREE.Mesh(skyGeometry, skyMaterial);
+        scene.add(skybox);
+
+        // Add lighting
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(1, 1, 1).normalize();
+        scene.add(directionalLight);
+
+        // Mosaic floor
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const context = canvas.getContext('2d');
+        if (!context) {
+            console.error("Canvas context not supported");
+            throw new Error("Canvas context not supported");
+        }
+        const floorTexture = new THREE.Texture(canvas);
+        floorTexture.wrapS = floorTexture.wrapT = THREE.RepeatWrapping;
+        floorTexture.repeat.set(10, 10);
+        function updateFloorTexture() {
+            try {
+                context.fillStyle = 'rgba(11, 16, 31, 0.5)';
+                context.fillRect(0, 0, 512, 512);
+                for (let x = 0; x < 512; x += 32) {
+                    for (let y = 0; y < 512; y += 32) {
+                        const time = Date.now() * 0.001;
+                        const r = Math.sin(time + x * 0.1) * 0.5 + 0.5;
+                        const g = Math.cos(time + y * 0.1) * 0.5 + 0.5;
+                        const b = Math.sin(time + (x + y) * 0.05) * 0.5 + 0.5;
+                        context.fillStyle = `rgba(${Math.floor(r * 255)}, ${Math.floor(g * 255)}, ${Math.floor(b * 255)}, 0.4)`;
+                        context.beginPath();
+                        context.moveTo(x + 16, y);
+                        context.lineTo(x + 32, y + 16);
+                        context.lineTo(x + 16, y + 32);
+                        context.lineTo(x, y + 16);
+                        context.closePath();
+                        context.fill();
+                        context.strokeStyle = 'rgba(0, 212, 255, 0.5)';
+                        context.lineWidth = 1;
+                        context.stroke();
+                    }
+                }
+                floorTexture.needsUpdate = true;
+            } catch (error) {
+                console.error("Error updating floor texture:", error);
+            }
+        }
+        const planeGeometry = new THREE.PlaneGeometry(200, 200);
+        const planeMaterial = new THREE.MeshPhongMaterial({ map: floorTexture, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        plane.rotation.x = -Math.PI / 2;
+        scene.add(plane);
+
+        // Particle system for snake trail
+        const trailCount = 75;
+        const trailGeometry = new THREE.BufferGeometry();
+        const trailPosArray = new Float32Array(trailCount * 3);
+        const trailColors = new Float32Array(trailCount * 3);
+        for (let i = 0; i < trailCount; i++) {
+            trailPosArray[i * 3] = 0;
+            trailPosArray[i * 3 + 1] = 0;
+            trailPosArray[i * 3 + 2] = 0;
+            const trailColor = [1, 0.2, 0.6];
+            trailColors[i * 3] = trailColor[0];
+            trailColors[i * 3 + 1] = trailColor[1];
+            trailColors[i * 3 + 2] = trailColor[2];
+        }
+        trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPosArray, 3));
+        trailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 3));
+        const trailMaterial = new THREE.PointsMaterial({ size: 0.5, vertexColors: true, transparent: true, opacity: 0.8 });
+        const trailParticles = new THREE.Points(trailGeometry, trailMaterial);
+        scene.add(trailParticles);
+
+        // Particle system for food collection
+        const particleCount = 30;
+        const particleGeometry = new THREE.BufferGeometry();
+        const posArray = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        for (let i = 0; i < particleCount; i++) {
+            posArray[i * 3] = 0;
+            posArray[i * 3 + 1] = 0;
+            posArray[i * 3 + 2] = 0;
+            const colorOptions = [[1, 0, 0], [0, 0, 1], [0, 1, 0], [0.5, 0, 0.5], [1, 1, 0]];
+            const color = colorOptions[Math.floor(Math.random() * colorOptions.length)];
+            colors[i * 3] = color[0];
+            colors[i * 3 + 1] = color[1];
+            colors[i * 3 + 2] = color[2];
+        }
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const particleMaterial = new THREE.PointsMaterial({ size: 0.8, vertexColors: true });
+        const particles = new THREE.Points(particleGeometry, particleMaterial);
+        scene.add(particles);
+        let particleTimer = 0;
+
+        // Particle system for death effect
+        const deathParticleCount = 100;
+        const deathParticleGeometry = new THREE.BufferGeometry();
+        const deathPosArray = new Float32Array(deathParticleCount * 3);
+        const deathColors = new Float32Array(deathParticleCount * 3);
+        const deathSizes = new Float32Array(deathParticleCount);
+        for (let i = 0; i < deathParticleCount; i++) {
+            deathPosArray[i * 3] = 0;
+            deathPosArray[i * 3 + 1] = 0;
+            deathPosArray[i * 3 + 2] = 0;
+            const colorOptions = [[1, 0, 0], [0, 0, 1], [0, 1, 0], [0.5, 0, 0.5], [1, 1, 0]];
+            const color = colorOptions[Math.floor(Math.random() * colorOptions.length)];
+            deathColors[i * 3] = color[0];
+            deathColors[i * 3 + 1] = color[1];
+            deathColors[i * 3 + 2] = color[2];
+            deathSizes[i] = Math.random() * 1.2 + 0.4;
+        }
+        deathParticleGeometry.setAttribute('position', new THREE.BufferAttribute(deathPosArray, 3));
+        deathParticleGeometry.setAttribute('color', new THREE.BufferAttribute(deathColors, 3));
+        const deathParticleMaterial = new THREE.PointsMaterial({ size: 0.8, vertexColors: true, sizeAttenuation: true });
+        const deathParticles = new THREE.Points(deathParticleGeometry, deathParticleMaterial);
+        scene.add(deathParticles);
+        let deathParticleTimer = 0;
+
+        // Snake class
+        class Snake {
+            constructor(isPlayer = false) {
+                this.segments = [];
+                this.positions = [];
+                this.isPlayer = isPlayer;
+                this.color = isPlayer ? 0xff2e63 : Math.random() * 0xffffff;
+                const segmentGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+                const segmentMaterial = new THREE.MeshPhongMaterial({ color: this.color, shininess: 100, emissive: this.color * 0.3 });
+                const head = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                head.position.set(
+                    isPlayer ? 0 : (Math.random() - 0.5) * 180,
+                    0.5,
+                    isPlayer ? 0 : (Math.random() - 0.5) * 180
+                );
+                this.segments.push(head);
+                this.positions.push(head.position.clone());
+                scene.add(head);
+
+                const eyeGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+                const eyeMaterial = new THREE.MeshPhongMaterial({ color: 0x000000, shininess: 200 });
+                const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                leftEye.position.set(0.3, 0.2, 0.3);
+                const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                rightEye.position.set(-0.3, 0.2, 0.3);
+                head.add(leftEye);
+                head.add(rightEye);
+
+                this.direction = new THREE.Vector3(
+                    isPlayer ? 0 : (Math.random() - 0.5) * 2,
+                    0,
+                    isPlayer ? -1 : (Math.random() - 0.5) * 2
+                ).normalize();
+                this.targetDirection = this.direction.clone();
+                this.speed = isPlayer ? 0.15 : 0.1;
+                this.boosting = false;
+                this.power = 100;
+                this.length = isPlayer ? 5 : 10;
+                for (let i = 1; i < this.length; i++) {
+                    const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                    const pos = head.position.clone().add(new THREE.Vector3(0, 0, i * 1.2));
+                    segment.position.copy(pos);
+                    this.segments.push(segment);
+                    this.positions.push(pos.clone());
+                    scene.add(segment);
+                }
+            }
+
+            update(targetPos = null) {
+                try {
+                    const head = this.segments[0];
+                    if (this.isPlayer && targetPos) {
+                        const vector = new THREE.Vector3(
+                            (targetPos.x / window.innerWidth) * 2 - 1,
+                            -((targetPos.y / window.innerHeight) * 2 - 1),
+                            0.5
+                        );
+                        vector.unproject(camera);
+                        const dir = vector.sub(camera.position).normalize();
+                        const distance = -camera.position.y / dir.y;
+                        if (distance < 0) {
+                            console.warn("Invalid camera projection");
+                            return false;
+                        }
+                        const targetWorldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+                        targetWorldPos.y = 0.5;
+                        this.targetDirection = targetWorldPos.sub(head.position).normalize();
+                        this.targetDirection.y = 0;
+                    } else if (!this.isPlayer) {
+                        this.targetDirection.add(new THREE.Vector3((Math.random() - 0.5) * 0.02, 0, (Math.random() - 0.5) * 0.02)).normalize();
+                    }
+
+                    this.direction.lerp(this.targetDirection, 0.2);
+
+                    if (this.isPlayer) {
+                        if (this.boosting && this.power > 0) {
+                            this.speed = 0.3;
+                            this.power -= 0.5;
+                            document.getElementById('power-inner').style.width = this.power + '%';
+                            if (this.power <= 0) {
+                                this.boosting = false;
+                                document.getElementById('boost').textContent = 'Boost: Recharging';
+                            }
+                        } else {
+                            this.speed = 0.15;
+                            if (this.power < 100 && !this.boosting) {
+                                this.power += 0.2;
+                                document.getElementById('power-inner').style.width = this.power + '%';
+                            }
+                            if (this.power >= 100) {
+                                document.getElementById('boost').textContent = 'Boost: Ready (Right Click)';
+                            } else {
+                                document.getElementById('boost').textContent = 'Boost: Recharging (' + Math.round(this.power) + '%)';
+                            }
+                        }
+                    }
+
+                    const newHeadPos = head.position.clone().add(this.direction.clone().multiplyScalar(this.speed));
+                    if (Math.abs(newHeadPos.x) > 100 || Math.abs(newHeadPos.z) > 100) {
+                        if (this.isPlayer) {
+                            console.error("Game Over: Hit boundary at", newHeadPos);
+                            this.spawnDeathParticles(newHeadPos);
+                            return true;
+                        }
+                        newHeadPos.set((Math.random() - 0.5) * 180, 0.5, (Math.random() - 0.5) * 180);
+                    }
+
+                    this.positions.unshift(newHeadPos.clone());
+                    if (this.positions.length > this.length) {
+                        this.positions.pop();
+                    }
+
+                    for (let i = 0; i < this.segments.length; i++) {
+                        if (this.positions[i]) {
+                            this.segments[i].position.copy(this.positions[i]);
+                            if (i > 0) {
+                                const dir = this.positions[i - 1].clone().sub(this.positions[i]).normalize();
+                                this.segments[i].lookAt(this.positions[i - 1]);
+                            } else {
+                                head.lookAt(head.position.clone().add(this.direction));
+                            }
+                        }
+                    }
+
+                    if (this.isPlayer) {
+                        const trailPositions = trailParticles.geometry.attributes.position.array;
+                        for (let i = trailCount - 1; i > 0; i--) {
+                            trailPositions[i * 3] = trailPositions[(i - 1) * 3];
+                            trailPositions[i * 3 + 1] = trailPositions[(i - 1) * 3 + 1];
+                            trailPositions[i * 3 + 2] = trailPositions[(i - 1) * 3 + 2];
+                        }
+                        trailPositions[0] = newHeadPos.x;
+                        trailPositions[1] = newHeadPos.y;
+                        trailPositions[2] = newHeadPos.z;
+                        trailParticles.geometry.attributes.position.needsUpdate = true;
+                    }
+
+                    return false;
+                } catch (error) {
+                    console.error("Snake update error:", error);
+                    return this.isPlayer;
+                }
+            }
+
+            grow(amount = 1) {
+                try {
+                    this.length += amount;
+                    const segmentGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+                    const segmentMaterial = new THREE.MeshPhongMaterial({ color: this.color, shininess: 100, emissive: this.color * 0.3 });
+                    for (let i = 0; i < amount; i++) {
+                        const newSegment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                        const lastPos = this.positions[this.positions.length - 1].clone();
+                        newSegment.position.copy(lastPos);
+                        this.segments.push(newSegment);
+                        this.positions.push(lastPos.clone());
+                        scene.add(newSegment);
+                    }
+                    console.log(`${this.isPlayer ? 'Player' : 'AI'} snake grew, new length:`, this.length);
+                } catch (error) {
+                    console.error("Snake grow error:", error);
+                }
+            }
+
+            spawnDeathParticles(position) {
+                try {
+                    const positions = deathParticles.geometry.attributes.position.array;
+                    for (let i = 0; i < deathParticleCount; i++) {
+                        positions[i * 3] = position.x + (Math.random() - 0.5) * 2;
+                        positions[i * 3 + 1] = position.y + Math.random() * 2;
+                        positions[i * 3 + 2] = position.z + (Math.random() - 0.5) * 2;
+                    }
+                    deathParticles.geometry.attributes.position.needsUpdate = true;
+                    deathParticleTimer = 60;
+                } catch (error) {
+                    console.error("Error spawning death particles:", error);
+                }
+            }
+        }
+
+        // Player snake
+        let playerSnake = new Snake(true);
+        let score = 0;
+        let gameOver = false;
+        let lastTime = performance.now();
+        let frameCount = 0;
+
+        // AI snakes
+        const aiSnakes = [];
+        for (let i = 0; i < 5; i++) {
+            aiSnakes.push(new Snake());
+        }
+
+        // Food setup with placeholder images (switch to local files when running on server)
+        const foodTypes = [
+            { path: 'https://via.placeholder.com/610x382.png/FF0000/FFFFFF?text=vienkeo', growth: 1, width: 610 / 1000, height: 382 / 1000, probability: 0.4 },
+            { path: 'https://via.placeholder.com/749x858.png/00FF00/FFFFFF?text=goisiro', growth: 3, width: 749 / 1000, height: 858 / 1000, probability: 0.2 },
+            { path: 'https://via.placeholder.com/1191x665.png/0000FF/FFFFFF?text=xucxich', growth: 7, width: 1191 / 1000, height: 665 / 1000, probability: 0.1333 },
+            { path: 'https://via.placeholder.com/482x676.png/FFFF00/FFFFFF?text=suadiup', growth: 10, width: 482 / 1000, height: 676 / 1000, probability: 0.1333 },
+            { path: 'https://via.placeholder.com/1077x1273.png/FF00FF/FFFFFF?text=hopsiro', growth: 15, width: 1077 / 1000, height: 1273 / 1000, probability: 0.0667 },
+            { path: 'https://via.placeholder.com/1532x1540.png/00FFFF/FFFFFF?text=lokeo', growth: 25, width: 1532 / 1000, height: 1540 / 1000, probability: 0.0667 }
+        ];
+        const textureLoader = new THREE.TextureLoader();
+        const foods = [];
+        function spawnFood(count = 1) {
+            try {
+                console.log("Attempting to spawn", count, "food items");
+                for (let i = 0; i < count; i++) {
+                    const rand = Math.random();
+                    let selectedFood;
+                    let cumulativeProb = 0;
+                    for (const foodType of foodTypes) {
+                        cumulativeProb += foodType.probability;
+                        if (rand < cumulativeProb) {
+                            selectedFood = foodType;
+                            break;
+                        }
+                    }
+                    let material = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Default fallback
+                    let textureLoaded = false;
+                    textureLoader.load(
+                        selectedFood.path,
+                        (texture) => {
+                            console.log(`Texture loaded successfully: ${selectedFood.path}`);
+                            material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+                            textureLoaded = true;
+                        },
+                        undefined,
+                        (error) => {
+                            console.error(`Failed to load texture ${selectedFood.path}:`, error);
+                            material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                            textureLoaded = false;
+                        }
+                    );
+                    setTimeout(() => {
+                        const geometry = textureLoaded
+                            ? new THREE.PlaneGeometry(selectedFood.width * 2, selectedFood.height * 2)
+                            : new THREE.SphereGeometry(0.5, 16, 16);
+                        const food = new THREE.Mesh(geometry, material);
+                        food.growth = selectedFood.growth;
+                        let validPosition = false;
+                        let attempts = 0;
+                        const maxAttempts = 200;
+                        while (!validPosition && attempts < maxAttempts) {
+                            food.position.set(
+                                Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180)),
+                                0.7,
+                                Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180))
+                            );
+                            validPosition = true;
+                            for (let snake of aiSnakes.concat([playerSnake])) {
+                                for (let segment of snake.segments) {
+                                    if (food.position.distanceTo(segment.position) < 1.0) {
+                                        validPosition = false;
+                                        break;
+                                    }
+                                }
+                                if (!validPosition) break;
+                            }
+                            attempts++;
+                        }
+                        if (validPosition) {
+                            if (geometry instanceof THREE.PlaneGeometry) {
+                                food.rotation.x = -Math.PI / 2;
+                            }
+                            foods.push(food);
+                            scene.add(food);
+                            console.log(`Food spawned: ${selectedFood.path.split('/').pop()} (+${selectedFood.growth}) at`, food.position);
+                        } else {
+                            console.warn(`Failed to spawn food ${selectedFood.path.split('/').pop()} after ${maxAttempts} attempts`);
+                        }
+                    }, 1000);
+                }
+            } catch (error) {
+                console.error("Error spawning food:", error);
+            }
+        }
+        // Initial spawn to match desired distribution
+        const initialCounts = { 1: 6, 3: 3, 7: 2, 10: 2, 15: 1, 25: 1 };
+        for (const [growth, count] of Object.entries(initialCounts)) {
+            for (let i = 0; i < count; i++) {
+                const foodType = foodTypes.find(f => f.growth === parseInt(growth));
+                let material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                let textureLoaded = false;
+                textureLoader.load(
+                    foodType.path,
+                    (texture) => {
+                        console.log(`Initial texture loaded successfully: ${foodType.path}`);
+                        material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+                        textureLoaded = true;
+                    },
+                    undefined,
+                    (error) => {
+                        console.error(`Failed to load initial texture ${foodType.path}:`, error);
+                        material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                        textureLoaded = false;
+                    }
+                );
+                setTimeout(() => {
+                    const geometry = textureLoaded
+                        ? new THREE.PlaneGeometry(foodType.width * 2, foodType.height * 2)
+                        : new THREE.SphereGeometry(0.5, 16, 16);
+                    const food = new THREE.Mesh(geometry, material);
+                    food.growth = foodType.growth;
+                    let validPosition = false;
+                    let attempts = 0;
+                    const maxAttempts = 200;
+                    while (!validPosition && attempts < maxAttempts) {
+                        food.position.set(
+                            Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180)),
+                            0.7,
+                            Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180))
+                        );
+                        validPosition = true;
+                        for (let snake of aiSnakes.concat([playerSnake])) {
+                            for (let segment of snake.segments) {
+                                if (food.position.distanceTo(segment.position) < 1.0) {
+                                    validPosition = false;
+                                    break;
+                                }
+                            }
+                            if (!validPosition) break;
+                        }
+                        attempts++;
+                    }
+                    if (validPosition) {
+                        if (geometry instanceof THREE.PlaneGeometry) {
+                            food.rotation.x = -Math.PI / 2;
+                        }
+                        foods.push(food);
+                        scene.add(food);
+                        console.log(`Initial food spawned: ${foodType.path.split('/').pop()} (+${foodType.growth}) at`, food.position);
+                    } else {
+                        console.warn(`Failed to spawn initial food ${foodType.path.split('/').pop()} after ${maxAttempts} attempts`);
+                    }
+                }, 1000);
+            }
+        }
+
+        // Camera positioning
+        camera.position.set(0, 15, 20);
+        camera.lookAt(0, 0, 0);
+
+        // Mouse controls
+        let mousePos = null;
+        document.addEventListener('mousemove', (event) => {
+            mousePos = { x: event.clientX, y: event.clientY };
+        });
+        document.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            if (!gameOver && playerSnake.power >= 100) {
+                playerSnake.boosting = true;
+                document.getElementById('boost').textContent = 'Boost: Active';
+                console.log("Boost activated");
+            }
+        });
+        document.addEventListener('mouseup', (event) => {
+            if (event.button === 2) {
+                playerSnake.boosting = false;
+                console.log("Boost deactivated");
+            }
+        });
+
+        // Touch controls for mobile
+        document.addEventListener('touchmove', (event) => {
+            mousePos = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+        });
+        document.addEventListener('touchstart', (event) => {
+            if (!gameOver && playerSnake.power >= 100) {
+                playerSnake.boosting = true;
+                document.getElementById('boost').textContent = 'Boost: Active';
+                console.log("Boost activated (touch)");
+            }
+        });
+        document.addEventListener('touchend', () => {
+            playerSnake.boosting = false;
+            console.log("Boost deactivated (touch)");
+        });
+
+        // Restart functionality
+        function restartGame() {
+            try {
+                playerSnake.segments.forEach(segment => scene.remove(segment));
+                aiSnakes.forEach(snake => snake.segments.forEach(segment => scene.remove(segment)));
+                foods.forEach(food => scene.remove(food));
+                trailParticles.geometry.attributes.position.array.fill(0);
+                trailParticles.geometry.attributes.position.needsUpdate = true;
+                deathParticles.geometry.attributes.position.array.fill(0);
+                deathParticles.geometry.attributes.position.needsUpdate = true;
+                playerSnake = new Snake(true);
+                aiSnakes.length = 0;
+                for (let i = 0; i < 5; i++) {
+                    aiSnakes.push(new Snake());
+                }
+                foods.length = 0;
+                const initialCounts = { 1: 6, 3: 3, 7: 2, 10: 2, 15: 1, 25: 1 };
+                for (const [growth, count] of Object.entries(initialCounts)) {
+                    for (let i = 0; i < count; i++) {
+                        const foodType = foodTypes.find(f => f.growth === parseInt(growth));
+                        let material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                        let textureLoaded = false;
+                        textureLoader.load(
+                            foodType.path,
+                            (texture) => {
+                                console.log(`Restart texture loaded successfully: ${foodType.path}`);
+                                material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+                                textureLoaded = true;
+                            },
+                            undefined,
+                            (error) => {
+                                console.error(`Failed to load restart texture ${foodType.path}:`, error);
+                                material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                                textureLoaded = false;
+                            }
+                        );
+                        setTimeout(() => {
+                            const geometry = textureLoaded
+                                ? new THREE.PlaneGeometry(foodType.width * 2, foodType.height * 2)
+                                : new THREE.SphereGeometry(0.5, 16, 16);
+                            const food = new THREE.Mesh(geometry, material);
+                            food.growth = foodType.growth;
+                            let validPosition = false;
+                            let attempts = 0;
+                            const maxAttempts = 200;
+                            while (!validPosition && attempts < maxAttempts) {
+                                food.position.set(
+                                    Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180)),
+                                    0.7,
+                                    Math.max(-90, Math.min(90, (Math.random() - 0.5) * 180))
+                                );
+                                validPosition = true;
+                                for (let snake of aiSnakes.concat([playerSnake])) {
+                                    for (let segment of snake.segments) {
+                                        if (food.position.distanceTo(segment.position) < 1.0) {
+                                            validPosition = false;
+                                            break;
+                                        }
+                                    }
+                                    if (!validPosition) break;
+                                }
+                                attempts++;
+                            }
+                            if (validPosition) {
+                                if (geometry instanceof THREE.PlaneGeometry) {
+                                    food.rotation.x = -Math.PI / 2;
+                                }
+                                foods.push(food);
+                                scene.add(food);
+                                console.log(`Restart food spawned: ${foodType.path.split('/').pop()} (+${foodType.growth}) at`, food.position);
+                            } else {
+                                console.warn(`Failed to spawn restart food ${foodType.path.split('/').pop()} after ${maxAttempts} attempts`);
+                            }
+                        }, 1000);
+                    }
+                }
+                score = 0;
+                playerSnake.power = 100;
+                document.getElementById('score').textContent = 'Score: 0';
+                document.getElementById('speed').textContent = 'Speed: 0.15';
+                document.getElementById('fps').textContent = 'FPS: 0';
+                document.getElementById('length').textContent = 'Length: 5';
+                document.getElementById('boost').textContent = 'Boost: Ready (Right Click)';
+                document.getElementById('power-inner').style.width = '100%';
+                gameOver = false;
+                document.getElementById('game-over').style.display = 'none';
+                lastTime = performance.now();
+                frameCount = 0;
+                animate();
+            } catch (error) {
+                console.error("Restart error:", error);
+            }
+        }
+
+        document.getElementById('restart-btn').addEventListener('click', restartGame);
+
+        // Animation loop
+        function animate() {
+            if (gameOver) return;
+            requestAnimationFrame(animate);
+
+            try {
+                console.log("Current food count:", foods.length, "Positions:", foods.map(f => f.position)); // Debug food
+                updateFloorTexture();
+                if (playerSnake.update(mousePos)) {
+                    gameOver = true;
+                    document.getElementById('final-score').textContent = 'Score: ' + score;
+                    document.getElementById('game-over').style.display = 'block';
+                    console.error("Game Over: Player hit boundary");
+                    return;
+                }
+
+                // Rotate food for visibility
+                foods.forEach(food => food.rotation.y += 0.01);
+
+                // Update AI snakes and check for food collisions
+                for (let i = aiSnakes.length - 1; i >= 0; i--) {
+                    const snake = aiSnakes[i];
+                    if (snake.update()) {
+                        snake.segments.forEach(segment => scene.remove(segment));
+                        aiSnakes.splice(i, 1);
+                        console.log("AI snake removed due to boundary collision");
+                        spawnFood(1);
+                        continue;
+                    }
+                    let ateFood = false;
+                    for (let j = foods.length - 1; j >= 0; j--) {
+                        const food = foods[j];
+                        const distance = snake.segments[0].position.distanceTo(food.position);
+                        if (distance < 0.8) {
+                            console.log(`AI snake ate ${foodTypes.find(f => f.growth === food.growth).path.split('/').pop()} (+${food.growth}) at:`, food.position, `New length:`, snake.length + food.growth);
+                            snake.grow(food.growth);
+                            scene.remove(food);
+                            foods.splice(j, 1);
+                            spawnFood(1);
+                            ateFood = true;
+                            const positions = particles.geometry.attributes.position.array;
+                            for (let k = 0; k < particleCount; k++) {
+                                positions[k * 3] = food.position.x + (Math.random() - 0.5) * 0.5;
+                                positions[k * 3 + 1] = food.position.y + Math.random() * 0.5;
+                                positions[k * 3 + 2] = food.position.z + (Math.random() - 0.5) * 0.5;
+                            }
+                            particles.geometry.attributes.position.needsUpdate = true;
+                            particleTimer = 30;
+                            break;
+                        }
+                    }
+                }
+
+                // Update death particles
+                if (deathParticleTimer > 0) {
+                    deathParticleTimer--;
+                    const positions = deathParticles.geometry.attributes.position.array;
+                    for (let i = 0; i < deathParticleCount; i++) {
+                        positions[i * 3] += (Math.random() - 0.5) * 0.1;
+                        positions[i * 3 + 1] += 0.05;
+                        positions[i * 3 + 2] += (Math.random() - 0.5) * 0.1;
+                    }
+                    deathParticles.geometry.attributes.position.needsUpdate = true;
+                    if (deathParticleTimer === 0) {
+                        for (let i = 0; i < deathParticleCount * 3; i++) {
+                            positions[i] = 0;
+                        }
+                        deathParticles.geometry.attributes.position.needsUpdate = true;
+                    }
+                }
+
+                // Check food collisions for player
+                let ateFood = false;
+                for (let i = foods.length - 1; i >= 0; i--) {
+                    const food = foods[i];
+                    const distance = playerSnake.segments[0].position.distanceTo(food.position);
+                    if (distance < 0.8) {
+                        console.log(`Player ate ${foodTypes.find(f => f.growth === food.growth).path.split('/').pop()} (+${food.growth}) at:`, food.position, `Score:`, score + food.growth * 10, `Length:`, playerSnake.length + food.growth);
+                        score += food.growth * 10;
+                        playerSnake.grow(food.growth);
+                        document.getElementById('score').textContent = 'Score: ' + score;
+                        document.getElementById('length').textContent = 'Length: ' + playerSnake.length;
+                        scene.remove(food);
+                        foods.splice(i, 1);
+                        spawnFood(1);
+                        ateFood = true;
+                        const positions = particles.geometry.attributes.position.array;
+                        for (let j = 0; j < particleCount; j++) {
+                            positions[j * 3] = food.position.x + (Math.random() - 0.5) * 0.5;
+                            positions[j * 3 + 1] = food.position.y + Math.random() * 0.5;
+                            positions[j * 3 + 2] = food.position.z + (Math.random() - 0.5) * 0.5;
+                        }
+                        particles.geometry.attributes.position.needsUpdate = true;
+                        particleTimer = 30;
+                        break;
+                    }
+                }
+
+                // Check head-to-tail collisions
+                if (!ateFood) {
+                    const playerHead = playerSnake.segments[0];
+                    for (let i = aiSnakes.length - 1; i >= 0; i--) {
+                        const snake = aiSnakes[i];
+                        const tailIndex = snake.segments.length - 1;
+                        if (snake.segments[tailIndex] && playerHead.position.distanceTo(snake.segments[tailIndex].position) < 0.6) {
+                            console.error("Game Over: Player hit AI tail at", snake.segments[tailIndex].position);
+                            playerSnake.spawnDeathParticles(playerHead.position);
+                            gameOver = true;
+                            document.getElementById('final-score').textContent = 'Score: ' + score;
+                            document.getElementById('game-over').style.display = 'block';
+                            return;
+                        }
+                    }
+                    for (let snake of aiSnakes) {
+                        const aiHead = snake.segments[0];
+                        const playerTailIndex = playerSnake.segments.length - 1;
+                        if (playerSnake.segments[playerTailIndex] && aiHead.position.distanceTo(playerSnake.segments[playerTailIndex].position) < 0.6) {
+                            console.error("Game Over: AI hit player tail at", playerSnake.segments[playerTailIndex].position);
+                            playerSnake.spawnDeathParticles(playerHead.position);
+                            gameOver = true;
+                            document.getElementById('final-score').textContent = 'Score: ' + score;
+                            document.getElementById('game-over').style.display = 'block';
+                            return;
+                        }
+                    }
+                    for (let i = aiSnakes.length - 1; i >= 0; i--) {
+                        const snake = aiSnakes[i];
+                        const aiHead = snake.segments[0];
+                        for (let j = aiSnakes.length - 1; j >= 0; j--) {
+                            if (i !== j) {
+                                const otherSnake = aiSnakes[j];
+                                const tailIndex = otherSnake.segments.length - 1;
+                                if (otherSnake.segments[tailIndex] && aiHead.position.distanceTo(otherSnake.segments[tailIndex].position) < 0.6) {
+                                    console.log("AI snake", i, "hit AI snake", j, "tail at", otherSnake.segments[tailIndex].position);
+                                    snake.spawnDeathParticles(aiHead.position);
+                                    snake.segments.forEach(segment => scene.remove(segment));
+                                    aiSnakes.splice(i, 1);
+                                    spawnFood(1);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update food collection particles
+                if (particleTimer > 0) {
+                    particleTimer--;
+                    const positions = particles.geometry.attributes.position.array;
+                    for (let i = 0; i < particleCount; i++) {
+                        positions[i * 3 + 1] += 0.02;
+                    }
+                    particles.geometry.attributes.position.needsUpdate = true;
+                    if (particleTimer === 0) {
+                        for (let i = 0; i < particleCount * 3; i++) {
+                            positions[i] = 0;
+                        }
+                        particles.geometry.attributes.position.needsUpdate = true;
+                    }
+                }
+
+                // Update camera
+                camera.position.set(
+                    playerSnake.segments[0].position.x,
+                    15,
+                    playerSnake.segments[0].position.z + 20
+                );
+                camera.lookAt(playerSnake.segments[0].position);
+
+                // Update UI
+                document.getElementById('speed').textContent = 'Speed: ' + playerSnake.speed.toFixed(2);
+                frameCount++;
+                const currentTime = performance.now();
+                if (currentTime - lastTime >= 1000) {
+                    document.getElementById('fps').textContent = 'FPS: ' + Math.round(frameCount * 1000 / (currentTime - lastTime));
+                    frameCount = 0;
+                    lastTime = currentTime;
+                }
+
+                renderer.render(scene, camera);
+            } catch (error) {
+                console.error("Animation loop error:", error);
+                gameOver = true;
+                document.getElementById('final-score').textContent = 'Score: ' + score;
+                document.getElementById('game-over').style.display = 'block';
+            }
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
